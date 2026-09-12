@@ -1,0 +1,45 @@
+# Python仮想環境・キャッシュ
+venv/
+__pycache__/
+*.py[cod]
+
+# 撮影画像・試験画像
+images/
+test/
+*.jpg
+*.jpeg
+*.png
+
+# ログ・一時ファイル
+logs/
+run/
+*.log
+*.pid
+*.tmp
+
+# 自動処理の状態記録
+.uploaded_delivery_photos.json
+.last_event
+.last_photo_event
+
+# 過去版バックアップ
+backups/
+*_backup_*.py
+*_before_*.py
+
+# 秘密情報・認証情報
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+token*.json
+rclone.conf
+
+# OS・エディタ
+.DS_Store
+Thumbs.db
+*~
+
+# 現在使用していない旧版
+delivery_monitor.py

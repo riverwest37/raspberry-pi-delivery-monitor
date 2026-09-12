@@ -1,0 +1,16 @@
+[Unit]
+Description=Delivery Package Monitor V2
+After=network-online.target delivery-camera.service
+Wants=network-online.target delivery-camera.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/delivery_monitor
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/delivery_monitor/venv/bin/python /home/pi/delivery_monitor/delivery_monitor_v2.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Delivery Photo Dropbox Uploader
+After=network-online.target delivery-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Environment=HOME=/home/pi
+WorkingDirectory=/home/pi/delivery_monitor
+ExecStart=/home/pi/delivery_monitor/venv/bin/python /home/pi/delivery_monitor/photo_dropbox_uploader.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
