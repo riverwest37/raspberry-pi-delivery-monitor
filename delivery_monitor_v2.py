@@ -14,12 +14,16 @@ import numpy as np
 import paho.mqtt.publish as mqtt_publish
 
 
+BASE_DIR = Path(__file__).resolve().parent
+
 STREAM_URL = "http://127.0.0.1:8081/?action=stream"
 
 REFERENCE_FILES = [
-    "images/empty_reference_morning_20260908.jpg",
-    "images/empty_reference_evening_rain.jpg",
-    "images/empty_reference_night_20260908.jpg",
+    BASE_DIR / "images" / "empty_reference_morning_20260908.jpg",
+    BASE_DIR / "images" / "empty_reference_morning_sun.jpg",
+    BASE_DIR / "images" / "empty_reference_afternoon_sun.jpg",
+    BASE_DIR / "images" / "empty_reference_evening_rain.jpg",
+    BASE_DIR / "images" / "empty_reference_night_20260908.jpg",
 ]
 
 # 640 x 360 image coordinates
