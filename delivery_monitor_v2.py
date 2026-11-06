@@ -33,12 +33,17 @@ LIGHT_REFERENCE_FILES = [
 # run_onceなど既存の試験処理との互換性を残す
 REFERENCE_FILES = DAY_REFERENCE_FILES + LIGHT_REFERENCE_FILES
 
-# 640 x 360 image coordinates for the right-side camera position
+# Coordinate master: 640 x 360 empty-mat image
+COORDINATE_REFERENCE_FILE = (
+    BASE_DIR / "images" / "empty_reference_mat_clear_20261028.jpg"
+)
+
+# Full artificial-grass mat area defined on the coordinate master
 PACKAGE_POLYGON = np.array([
-    (355, 262),
-    (398, 262),
-    (398, 292),
-    (355, 293),
+    (350, 150),
+    (400, 150),
+    (410, 305),
+    (345, 305),
 ], dtype=np.int32)
 DOOR_AREA = (0, 80, 300, 280)
 LIGHT_AREA = (120, 30, 340, 75)
