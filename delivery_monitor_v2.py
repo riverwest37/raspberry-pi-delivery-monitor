@@ -6,33 +6,45 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import cv2
 import numpy as np
 import paho.mqtt.publish as mqtt_publish
-
+from astral import LocationInfo
+from astral.sun import sun
 
 BASE_DIR = Path(__file__).resolve().parent
 
 STREAM_URL = "http://127.0.0.1:8081/?action=stream"
 
-REFERENCE_FILES = [
-    BASE_DIR / "images" / "empty_reference_morning_20260908.jpg",
-    BASE_DIR / "images" / "empty_reference_morning_sun.jpg",
-    BASE_DIR / "images" / "empty_reference_afternoon_sun.jpg",
-    BASE_DIR / "images" / "empty_reference_evening_rain.jpg",
-    BASE_DIR / "images" / "empty_reference_night_20260908.jpg",
+DAY_REFERENCE_FILES = [
+    BASE_DIR / "images" / "empty_reference_mat_clear_20261028.jpg",
 ]
 
-# 640 x 360 image coordinates
-PACKAGE_AREA = (430, 130, 610, 300)
-DOOR_AREA = (500, 0, 640, 170)
-LIGHT_AREA = (100, 40, 400, 250)
+LIGHT_REFERENCE_FILES = [
+    BASE_DIR / "images" / "empty_reference_mat_light_clear_20261028.jpg",
+    BASE_DIR / "images" / "empty_reference_mat_late_clear_20261028.jpg",
+]
 
-PACKAGE_THRESHOLD = 4.0
-REMOVAL_THRESHOLD = 2.0
+
+# run_onceなど既存の試験処理との互換性を残す
+REFERENCE_FILES = DAY_REFERENCE_FILES + LIGHT_REFERENCE_FILES
+
+# 640 x 360 image coordinates for the right-side camera position
+PACKAGE_POLYGON = np.array([
+    (355, 262),
+    (398, 262),
+    (398, 292),
+    (355, 293),
+], dtype=np.int32)
+DOOR_AREA = (0, 80, 300, 280)
+LIGHT_AREA = (120, 30, 340, 75)
+
+PACKAGE_THRESHOLD = 3.0
+REMOVAL_THRESHOLD = 2.8
 DOOR_THRESHOLD = 50.0
 MOTION_THRESHOLD = 2.0
 
@@ -41,12 +53,23 @@ CONFIRM_SECONDS = 20
 RECHECK_WAIT_SECONDS = 60
 RECHECK_CONFIRM_SECONDS = 20
 CONFIRM_DOOR_LIMIT = 35.0
-LIGHT_DRIFT_LIMIT = 2.0
+LIGHT_DRIFT_LIMIT = 10.0
 CHECK_INTERVAL = 1.0
 
 # Package detection is active from 07:00 through 17:59.
 ACTIVE_START_HOUR = 7
 ACTIVE_END_HOUR = 18
+LOCAL_TZ = ZoneInfo("Asia/Tokyo")
+
+SUN_LOCATION = LocationInfo(
+    "Chiba-Mihama",
+    "Japan",
+    "Asia/Tokyo",
+    35.64,
+    140.06,
+)
+
+LIGHT_TRANSITION_MINUTES = 10
 
 SAVE_DIR = Path("images/events_v2")
 LATEST_IMAGE = Path("images/latest_status_v2.jpg")
@@ -55,6 +78,32 @@ MQTT_HOST = "192.168.0.140"
 MQTT_PORT = 1883
 MQTT_TOPIC = "security/entrance/delivery"
 
+def get_reference_mode(now=None):
+    """Return day, transition, or light according to today's sunset."""
+    if now is None:
+        now = datetime.now(LOCAL_TZ)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=LOCAL_TZ)
+
+    solar = sun(
+        SUN_LOCATION.observer,
+        date=now.date(),
+        tzinfo=LOCAL_TZ,
+    )
+
+    sunset_time = solar["sunset"]
+    light_start = sunset_time + timedelta(
+        minutes=LIGHT_TRANSITION_MINUTES
+    )
+
+    if now < sunset_time:
+        mode = "day"
+    elif now < light_start:
+        mode = "transition"
+    else:
+        mode = "light"
+
+    return mode, sunset_time, light_start
 
 def crop(image, area):
     x1, y1, x2, y2 = area
@@ -93,6 +142,34 @@ def raw_change_percent(reference, frame, area):
     changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, kernel)
     return cv2.countNonZero(changed) / changed.size * 100.0
 
+def masked_change_percent(reference, frame, polygon):
+    ref_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    ref_gray = cv2.GaussianBlur(ref_gray, (9, 9), 0)
+    frame_gray = cv2.GaussianBlur(frame_gray, (9, 9), 0)
+
+    diff = cv2.absdiff(ref_gray, frame_gray)
+    _, changed = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+
+    kernel = np.ones((5, 5), np.uint8)
+    changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, kernel)
+
+    mask = np.zeros(changed.shape, dtype=np.uint8)
+    cv2.fillPoly(mask, [polygon], 255)
+    changed = cv2.bitwise_and(changed, mask)
+
+    mask_pixels = cv2.countNonZero(mask)
+    if mask_pixels == 0:
+        return 0.0
+
+    return cv2.countNonZero(changed) / mask_pixels * 100.0
+
+
+def corrected_masked_change_percent(reference, frame, polygon):
+    corrected, gain = compensate_brightness(reference, frame)
+    percent = masked_change_percent(reference, corrected, polygon)
+    return percent, gain
 
 def corrected_change_percent(reference, frame, area):
     corrected, gain = compensate_brightness(reference, frame)
@@ -103,12 +180,14 @@ def corrected_change_percent(reference, frame, area):
 def frame_motion_percent(previous, current):
     """Detect people/bags still moving, while suppressing overall light drift."""
     corrected, _ = compensate_brightness(previous, current)
-    return raw_change_percent(previous, corrected, PACKAGE_AREA)
+    return masked_change_percent(previous, corrected, PACKAGE_POLYGON)
 
+def load_references(filenames=None):
+    if filenames is None:
+        filenames = REFERENCE_FILES
 
-def load_references():
     references = []
-    for filename in REFERENCE_FILES:
+    for filename in filenames:
         image = cv2.imread(filename)
         if image is None:
             print(f"基準画像を読み込めないため除外: {filename}")
@@ -196,10 +275,9 @@ def draw_status(
     gain,
 ):
     result = frame.copy()
-    px1, py1, px2, py2 = PACKAGE_AREA
     dx1, dy1, dx2, dy2 = DOOR_AREA
 
-    cv2.rectangle(result, (px1, py1), (px2, py2), (0, 255, 255), 2)
+    cv2.polylines(result, [PACKAGE_POLYGON], True, (0, 255, 255), 2)
     cv2.rectangle(result, (dx1, dy1), (dx2, dy2), (255, 0, 255), 2)
 
     color = (0, 255, 0)
@@ -232,9 +310,13 @@ def draw_status(
 def evaluate_frame(references, frame):
     selected, current_light = select_reference(references, frame)
     reference = selected["image"]
-    package_change, gain = corrected_change_percent(
-        reference, frame, PACKAGE_AREA
+    # Artificial-grass mat is compared without global brightness correction.
+    # The tiled LIGHT_AREA and the green mat respond differently to sunlight.
+    package_change = masked_change_percent(
+        reference, frame, PACKAGE_POLYGON
     )
+    _, gain = compensate_brightness(reference, frame)
+
     door_change, _ = corrected_change_percent(reference, frame, DOOR_AREA)
     return {
         "selected": selected,
@@ -262,9 +344,11 @@ def run_once(filename):
     print(f"荷物変化率: {result['package_change']:.2f}%")
     print(f"扉変化率: {result['door_change']:.2f}%")
 
-
 def run_monitor():
-    references = load_references()
+    day_references = load_references(DAY_REFERENCE_FILES)
+    light_references = load_references(LIGHT_REFERENCE_FILES)
+    references = day_references + light_references
+
     cap = cv2.VideoCapture(STREAM_URL)
     if not cap.isOpened():
         raise SystemExit("カメラ映像を開けません")
@@ -283,6 +367,7 @@ def run_monitor():
     removal_recheck_light = None
     previous_frame = None
     previous_status = None
+    previous_reference_mode = None
     last_check = 0.0
 
     print("置き配監視V2を開始しました")
@@ -335,6 +420,7 @@ def run_monitor():
                 removal_recheck_since = None
                 removal_recheck_light = None
                 previous_frame = None
+                previous_reference_mode = None
                 status = "NIGHT PAUSE"
 
                 draw_status(
@@ -359,7 +445,86 @@ def run_monitor():
                 time.sleep(CHECK_INTERVAL)
                 continue
 
-            result = evaluate_frame(references, frame)
+            current_time = datetime.now(LOCAL_TZ)
+            reference_mode, sunset_time, light_start = (
+                get_reference_mode(current_time)
+            )
+
+            # 日没直後は玄関ライトの点灯・明るさ変化が安定するまで休止
+            if reference_mode == "transition":
+                stable_since = None
+                candidate_since = None
+                candidate_light = None
+                recheck_due = None
+                recheck_since = None
+                recheck_light = None
+                removal_since = None
+                removal_light = None
+                removal_recheck_due = None
+                removal_recheck_since = None
+                removal_recheck_light = None
+                previous_frame = None
+                previous_reference_mode = reference_mode
+                status = "LIGHT TRANSITION"
+
+                draw_status(
+                    frame,
+                    status,
+                    0.0,
+                    0.0,
+                    0.0,
+                    f"sunset_{sunset_time.strftime('%H%M')}",
+                    1.0,
+                )
+
+                if status != previous_status:
+                    timestamp = current_time.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    print(
+                        f"{timestamp} {status} "
+                        f"日没={sunset_time.strftime('%H:%M:%S')} "
+                        f"ライト基準開始="
+                        f"{light_start.strftime('%H:%M:%S')}"
+                    )
+                    previous_status = status
+
+                time.sleep(CHECK_INTERVAL)
+                continue
+
+            if reference_mode == "day":
+                active_references = day_references
+            else:
+                active_references = light_references
+
+            # 昼間基準とライト基準が切り替わる際は判定を初期化
+            if reference_mode != previous_reference_mode:
+                stable_since = None
+                candidate_since = None
+                candidate_light = None
+                recheck_due = None
+                recheck_since = None
+                recheck_light = None
+                removal_since = None
+                removal_light = None
+                removal_recheck_due = None
+                removal_recheck_since = None
+                removal_recheck_light = None
+                previous_frame = None
+
+                timestamp = current_time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                print(
+                    f"{timestamp} REFERENCE MODE "
+                    f"{reference_mode.upper()} "
+                    f"日没={sunset_time.strftime('%H:%M:%S')}"
+                )
+                previous_reference_mode = reference_mode
+
+            result = evaluate_frame(active_references, frame)
+
+
             package_change = result["package_change"]
             door_change = result["door_change"]
 

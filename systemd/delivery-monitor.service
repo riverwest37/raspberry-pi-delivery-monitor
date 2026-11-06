@@ -8,6 +8,8 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/delivery_monitor
 Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do /usr/bin/curl -fsS -m 3 "http://127.0.0.1:8081/?action=snapshot" -o /dev/null && exit 0; sleep 2; done; exit 1'
+TimeoutStartSec=75
 ExecStart=/home/pi/delivery_monitor/venv/bin/python /home/pi/delivery_monitor/delivery_monitor_v2.py
 Restart=always
 RestartSec=5

@@ -43,3 +43,6 @@ Thumbs.db
 
 # 現在使用していない旧版
 delivery_monitor.py
+
+# ローカルバックアップ
+*.bak*
