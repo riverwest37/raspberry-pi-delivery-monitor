@@ -22,6 +22,7 @@ STREAM_URL = "http://127.0.0.1:8081/?action=stream"
 
 DAY_REFERENCE_FILES = [
     BASE_DIR / "images" / "empty_reference_mat_clear_20261028.jpg",
+    BASE_DIR / "images" / "empty_reference_mat_light_clear_20261028.jpg",
 ]
 
 LIGHT_REFERENCE_FILES = [
